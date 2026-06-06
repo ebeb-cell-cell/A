@@ -1,208 +1,138 @@
-"""Tests for portfolio.py using mocked HTTP responses."""
+"""Tests for portfolio.py — yfinance calls are mocked throughout."""
 
 import json
 import sys
+import tempfile
 import unittest
 from io import StringIO
-from unittest.mock import MagicMock, patch
-
-import requests
+from pathlib import Path
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import portfolio as p
 
 
 # ---------------------------------------------------------------------------
-# Fixtures
+# Shared fixtures
 # ---------------------------------------------------------------------------
 
-PIES_RESPONSE = [
-    {
-        "settings": {
-            "id": 42,
-            "name": "Global Tech",
-            "createdAt": "2023-06-15T09:00:00Z",
-            "dividendCashAction": "REINVEST",
-        }
-    },
-    {
-        "settings": {
-            "id": 99,
-            "name": "Dividend Kings",
-            "createdAt": "2024-01-01T00:00:00Z",
-            "dividendCashAction": "FREE_CASH",
-        }
-    },
+HOLDINGS = [
+    {"ticker": "AAPL", "quantity": 5,   "entry_price": 178.50, "entry_date": "2023-07-10T14:30:00"},
+    {"ticker": "MSFT", "quantity": 3,   "entry_price": 320.00, "entry_date": "2023-07-10T14:31:00"},
+    {"ticker": "NVDA", "quantity": 2,   "entry_price": 450.00, "entry_date": "2023-08-01T10:00:00"},
 ]
 
-PIE_DETAIL = {
-    "settings": {
-        "id": 42,
-        "name": "Global Tech",
-        "createdAt": "2023-06-15T09:00:00Z",
-        "dividendCashAction": "REINVEST",
-    },
-    "instruments": [
-        {
-            "ticker": "AAPL_US_EQ",
-            "result": {
-                "priceAvgBuy": 178.50,
-                "quantity": 5.0,
-                "result": 62.50,
-                "resultCoefficient": 0.07,
-            },
-        },
-        {
-            "ticker": "MSFT_US_EQ",
-            "result": {
-                "priceAvgBuy": 320.00,
-                "quantity": 3.0,
-                "result": 105.00,
-                "resultCoefficient": 0.11,
-            },
-        },
-        {
-            "ticker": "NVDA_US_EQ",
-            "result": {
-                "priceAvgBuy": 450.00,
-                "quantity": 2.0,
-                "result": 300.00,
-                "resultCoefficient": 0.33,
-            },
-        },
-    ],
+PORTFOLIO_DOC = {"name": "Global Tech", "holdings": HOLDINGS}
+
+MARKET_DATA = {
+    "AAPL": {"name": "Apple Inc.",           "isin": "US0378331005", "currency": "USD", "current_price": 191.00},
+    "MSFT": {"name": "Microsoft Corporation","isin": "US5949181045", "currency": "USD", "current_price": 355.00},
+    "NVDA": {"name": "NVIDIA Corporation",   "isin": "US67066G1040", "currency": "USD", "current_price": 600.00},
 }
 
-PORTFOLIO_RESPONSE = [
-    {
-        "ticker": "AAPL_US_EQ",
-        "averagePricePaid": 178.50,
-        "currentPrice": 191.00,
-        "createdAt": "2023-07-10T14:30:00Z",
-        "quantity": 5.0,
-    },
-    {
-        "ticker": "MSFT_US_EQ",
-        "averagePricePaid": 320.00,
-        "currentPrice": 355.00,
-        "createdAt": "2023-07-10T14:31:00Z",
-        "quantity": 3.0,
-    },
-    {
-        "ticker": "NVDA_US_EQ",
-        "averagePricePaid": 450.00,
-        "currentPrice": 600.00,
-        "createdAt": "2023-08-01T10:00:00Z",
-        "quantity": 2.0,
-    },
-]
 
-INSTRUMENTS_RESPONSE = [
-    {"ticker": "AAPL_US_EQ", "name": "Apple Inc.", "shortName": "AAPL", "isin": "US0378331005", "currencyCode": "USD"},
-    {"ticker": "MSFT_US_EQ", "name": "Microsoft Corporation", "shortName": "MSFT", "isin": "US5949181045", "currencyCode": "USD"},
-    {"ticker": "NVDA_US_EQ", "name": "NVIDIA Corporation", "shortName": "NVDA", "isin": "US67066G1040", "currencyCode": "USD"},
-]
+def _make_ticker_mock(name, isin, currency, last_price):
+    """Build a mock yf.Ticker whose attributes mirror the real API."""
+    t = MagicMock()
+    t.info = {
+        "longName": name,
+        "currency": currency,
+        "currentPrice": last_price,
+    }
+    t.fast_info = MagicMock()
+    t.fast_info.last_price = last_price
+    t.fast_info.currency = currency
+    # isin is a property in the real class
+    type(t).isin = PropertyMock(return_value=isin)
+    return t
+
+
+def _ticker_side_effect(symbol):
+    md = MARKET_DATA.get(symbol)
+    if md is None:
+        raise ValueError(f"Unknown mock ticker: {symbol}")
+    return _make_ticker_mock(md["name"], md["isin"], md["currency"], md["current_price"])
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# load_portfolio
 # ---------------------------------------------------------------------------
 
-def _mock_response(data, status_code=200):
-    resp = MagicMock(spec=requests.Response)
-    resp.status_code = status_code
-    resp.json.return_value = data
-    resp.raise_for_status = MagicMock()
-    return resp
+class TestLoadPortfolio(unittest.TestCase):
+    def test_valid_file(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(PORTFOLIO_DOC, f)
+            name = f.name
+        result = p.load_portfolio(name)
+        self.assertEqual(result["name"], "Global Tech")
+        self.assertEqual(len(result["holdings"]), 3)
 
+    def test_missing_holdings_raises(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump({"name": "bad"}, f)
+            name = f.name
+        with self.assertRaises(ValueError):
+            p.load_portfolio(name)
 
-def _make_session(pies=None, pie=None, portfolio=None, instruments=None):
-    """Return a mock session whose get() returns correct data per URL path."""
-    session = MagicMock(spec=requests.Session)
-
-    def side_effect(url, **kwargs):
-        if "/equity/pies" in url and url.endswith("/pies"):
-            return _mock_response(pies or PIES_RESPONSE)
-        if "/equity/pies/" in url:
-            return _mock_response(pie or PIE_DETAIL)
-        if "/equity/portfolio" in url:
-            return _mock_response(portfolio or PORTFOLIO_RESPONSE)
-        if "/equity/metadata/instruments" in url:
-            return _mock_response(instruments or INSTRUMENTS_RESPONSE)
-        raise ValueError(f"Unexpected URL: {url}")
-
-    session.get.side_effect = side_effect
-    return session
+    def test_file_not_found(self):
+        with self.assertRaises(FileNotFoundError):
+            p.load_portfolio("/nonexistent/path/to/file.json")
 
 
 # ---------------------------------------------------------------------------
-# Unit tests
+# fetch_ticker_data / _get_isin
 # ---------------------------------------------------------------------------
 
-class TestFetchInstruments(unittest.TestCase):
-    def test_list_response(self):
-        session = _make_session()
-        result = p.fetch_instruments(session, "http://mock")
-        self.assertIn("AAPL_US_EQ", result)
-        self.assertEqual(result["AAPL_US_EQ"]["isin"], "US0378331005")
-        self.assertEqual(result["AAPL_US_EQ"]["name"], "Apple Inc.")
-        self.assertEqual(result["MSFT_US_EQ"]["currency"], "USD")
+class TestFetchTickerData(unittest.TestCase):
+    def _run(self, symbol="AAPL"):
+        mock_ticker = _ticker_side_effect(symbol)
+        with patch("yfinance.Ticker", return_value=mock_ticker):
+            return p.fetch_ticker_data(symbol)
 
-    def test_paginated_response(self):
-        page1 = {"items": INSTRUMENTS_RESPONSE[:2], "nextPagePath": "/equity/metadata/instruments?page=2"}
-        page2 = {"items": INSTRUMENTS_RESPONSE[2:], "nextPagePath": None}
+    def test_name(self):
+        self.assertEqual(self._run()["name"], "Apple Inc.")
 
-        session = MagicMock(spec=requests.Session)
-        calls = [_mock_response(page1), _mock_response(page2)]
-        session.get.side_effect = lambda url, **kw: calls.pop(0)
+    def test_isin(self):
+        self.assertEqual(self._run()["isin"], "US0378331005")
 
-        result = p.fetch_instruments(session, "http://mock")
-        self.assertEqual(len(result), 3)
-        self.assertIn("NVDA_US_EQ", result)
+    def test_currency(self):
+        self.assertEqual(self._run()["currency"], "USD")
+
+    def test_current_price(self):
+        self.assertEqual(self._run()["current_price"], 191.00)
+
+    def test_isin_fallback_to_info(self):
+        t = _make_ticker_mock("Test Corp", "US9999999999", "USD", 100.0)
+        # Make the isin property raise so we fall through to info dict
+        type(t).isin = PropertyMock(side_effect=Exception("scrape failed"))
+        t.info["isin"] = "US9999999999"
+        with patch("yfinance.Ticker", return_value=t):
+            result = p.fetch_ticker_data("TEST")
+        self.assertEqual(result["isin"], "US9999999999")
+
+    def test_isin_returns_na_when_unavailable(self):
+        t = _make_ticker_mock("Test Corp", None, "USD", 100.0)
+        type(t).isin = PropertyMock(return_value="-")
+        t.info.pop("isin", None)
+        with patch("yfinance.Ticker", return_value=t):
+            result = p.fetch_ticker_data("TEST")
+        self.assertEqual(result["isin"], "N/A")
+
+    def test_price_fallback_from_info(self):
+        t = _make_ticker_mock("Test Corp", "US0000000000", "USD", None)
+        t.fast_info.last_price = None
+        t.info["regularMarketPrice"] = 42.0
+        with patch("yfinance.Ticker", return_value=t):
+            result = p.fetch_ticker_data("TEST")
+        self.assertEqual(result["current_price"], 42.0)
 
 
-class TestFetchPortfolio(unittest.TestCase):
-    def test_keyed_by_ticker(self):
-        session = _make_session()
-        result = p.fetch_portfolio(session, "http://mock")
-        self.assertIn("AAPL_US_EQ", result)
-        self.assertEqual(result["AAPL_US_EQ"]["currentPrice"], 191.00)
-        self.assertEqual(result["MSFT_US_EQ"]["createdAt"], "2023-07-10T14:31:00Z")
-
-    def test_missing_ticker_skipped(self):
-        session = MagicMock(spec=requests.Session)
-        session.get.return_value = _mock_response([{"averagePricePaid": 100}, {"ticker": "X_EQ", "currentPrice": 10}])
-        result = p.fetch_portfolio(session, "http://mock")
-        self.assertEqual(list(result.keys()), ["X_EQ"])
-
-
-class TestFindPie(unittest.TestCase):
-    def test_by_id(self):
-        pie = p.find_pie(PIES_RESPONSE, "42")
-        self.assertIsNotNone(pie)
-        self.assertEqual(p._pie_settings(pie)["name"], "Global Tech")
-
-    def test_by_exact_name(self):
-        pie = p.find_pie(PIES_RESPONSE, "Dividend Kings")
-        self.assertIsNotNone(pie)
-        self.assertEqual(p._pie_settings(pie)["id"], 99)
-
-    def test_by_partial_name_case_insensitive(self):
-        pie = p.find_pie(PIES_RESPONSE, "global")
-        self.assertIsNotNone(pie)
-        self.assertEqual(p._pie_settings(pie)["id"], 42)
-
-    def test_not_found(self):
-        self.assertIsNone(p.find_pie(PIES_RESPONSE, "XYZ Unknown"))
-
+# ---------------------------------------------------------------------------
+# build_rows
+# ---------------------------------------------------------------------------
 
 class TestBuildRows(unittest.TestCase):
     def _run(self):
-        instruments = {item["ticker"]: {
-            "name": item["name"], "shortName": item["shortName"],
-            "isin": item["isin"], "currency": item["currencyCode"],
-        } for item in INSTRUMENTS_RESPONSE}
-        portfolio = {pos["ticker"]: pos for pos in PORTFOLIO_RESPONSE}
-        return p.build_rows(PIE_DETAIL, instruments, portfolio)
+        return p.build_rows(HOLDINGS, MARKET_DATA)
 
     def test_row_count(self):
         rows, summary = self._run()
@@ -215,9 +145,9 @@ class TestBuildRows(unittest.TestCase):
         self.assertEqual(values, sorted(values, reverse=True))
 
     def test_total_value(self):
-        rows, summary = self._run()
+        _, summary = self._run()
         expected = 5 * 191.00 + 3 * 355.00 + 2 * 600.00
-        self.assertAlmostEqual(summary["total_value"], expected, places=2)
+        self.assertAlmostEqual(summary["total_value"], expected, places=4)
 
     def test_percentages_sum_to_100(self):
         rows, summary = self._run()
@@ -225,124 +155,150 @@ class TestBuildRows(unittest.TestCase):
         pct_sum = sum(r["value"] / total * 100 for r in rows)
         self.assertAlmostEqual(pct_sum, 100.0, places=5)
 
-    def test_isin_present(self):
+    def test_isin_propagated(self):
         rows, _ = self._run()
         isins = {r["isin"] for r in rows}
         self.assertIn("US0378331005", isins)
-        self.assertIn("US5949181045", isins)
+        self.assertIn("US67066G1040", isins)
 
-    def test_current_price_from_portfolio(self):
+    def test_entry_fields_preserved(self):
         rows, _ = self._run()
-        aapl = next(r for r in rows if r["ticker"] == "AAPL_US_EQ")
-        self.assertEqual(aapl["current_price"], 191.00)
-
-    def test_entry_price_from_pie_result(self):
-        rows, _ = self._run()
-        aapl = next(r for r in rows if r["ticker"] == "AAPL_US_EQ")
+        aapl = next(r for r in rows if r["ticker"] == "AAPL")
         self.assertEqual(aapl["entry_price"], 178.50)
+        self.assertEqual(aapl["entry_date"], "2023-07-10T14:30:00")
 
-    def test_entry_time_from_portfolio(self):
-        rows, _ = self._run()
-        aapl = next(r for r in rows if r["ticker"] == "AAPL_US_EQ")
-        self.assertEqual(aapl["entry_time"], "2023-07-10T14:30:00Z")
+    def test_missing_market_data_gives_zero_value(self):
+        rows, summary = p.build_rows(
+            [{"ticker": "UNKNOWN", "quantity": 10, "entry_price": 50.0}],
+            {}
+        )
+        self.assertEqual(rows[0]["value"], 0.0)
+        self.assertEqual(summary["total_value"], 0.0)
 
 
-class TestPrintPortfolio(unittest.TestCase):
-    def test_output_contains_key_data(self):
-        instruments = {item["ticker"]: {
-            "name": item["name"], "shortName": item["shortName"],
-            "isin": item["isin"], "currency": item["currencyCode"],
-        } for item in INSTRUMENTS_RESPONSE}
-        portfolio = {pos["ticker"]: pos for pos in PORTFOLIO_RESPONSE}
-
-        captured = StringIO()
-        with patch("sys.stdout", captured):
-            p.print_portfolio(PIE_DETAIL, instruments, portfolio)
-
-        output = captured.getvalue()
-        self.assertIn("Global Tech", output)
-        self.assertIn("Apple Inc.", output)
-        self.assertIn("US0378331005", output)   # AAPL ISIN
-        self.assertIn("MSFT_US_EQ", output)
-        self.assertIn("2023-07-10", output)      # entry date
-        self.assertIn("191.0000", output)        # AAPL current price
-        self.assertIn("178.5000", output)        # AAPL entry price
-        self.assertIn("%", output)
-
+# ---------------------------------------------------------------------------
+# Formatting helpers
+# ---------------------------------------------------------------------------
 
 class TestFormatHelpers(unittest.TestCase):
     def test_fmt_price_with_currency(self):
         self.assertEqual(p._fmt_price(191.0, "USD"), "USD 191.0000")
 
+    def test_fmt_price_no_currency(self):
+        self.assertEqual(p._fmt_price(50.5), "50.5000")
+
     def test_fmt_price_none(self):
         self.assertEqual(p._fmt_price(None), "N/A")
 
-    def test_fmt_dt_iso(self):
+    def test_fmt_dt_iso_with_time(self):
+        self.assertEqual(p._fmt_dt("2023-07-10T14:30:00"), "2023-07-10 14:30")
+
+    def test_fmt_dt_iso_with_z(self):
         self.assertEqual(p._fmt_dt("2023-07-10T14:30:00Z"), "2023-07-10 14:30")
+
+    def test_fmt_dt_date_only(self):
+        self.assertEqual(p._fmt_dt("2023-07-10"), "2023-07-10 00:00")
 
     def test_fmt_dt_none(self):
         self.assertEqual(p._fmt_dt(None), "N/A")
 
-    def test_fmt_dt_invalid(self):
+    def test_fmt_dt_unrecognised_returned_as_is(self):
         self.assertEqual(p._fmt_dt("not-a-date"), "not-a-date")
 
 
-class TestNoApiKey(unittest.TestCase):
-    def test_exits_without_key(self):
-        with patch.dict("os.environ", {}, clear=True):
-            # Remove T212_API_KEY if set
-            env = {k: v for k, v in __import__("os").environ.items() if k != "T212_API_KEY"}
-            with patch.dict("os.environ", env, clear=True):
-                with self.assertRaises(SystemExit) as cm:
-                    with patch("sys.argv", ["portfolio.py"]):
-                        p.main()
-                self.assertEqual(cm.exception.code, 1)
+# ---------------------------------------------------------------------------
+# print_table output
+# ---------------------------------------------------------------------------
+
+class TestPrintTable(unittest.TestCase):
+    def _capture(self):
+        rows, summary = p.build_rows(HOLDINGS, MARKET_DATA)
+        buf = StringIO()
+        with patch("sys.stdout", buf):
+            p.print_table(PORTFOLIO_DOC, rows, summary)
+        return buf.getvalue()
+
+    def test_pie_name_shown(self):
+        self.assertIn("Global Tech", self._capture())
+
+    def test_company_names_shown(self):
+        out = self._capture()
+        self.assertIn("Apple Inc.", out)
+        self.assertIn("NVIDIA Corporation", out)
+
+    def test_isins_shown(self):
+        out = self._capture()
+        self.assertIn("US0378331005", out)
+        self.assertIn("US5949181045", out)
+
+    def test_entry_date_shown(self):
+        self.assertIn("2023-07-10", self._capture())
+
+    def test_current_price_shown(self):
+        self.assertIn("191.0000", self._capture())
+
+    def test_entry_price_shown(self):
+        self.assertIn("178.5000", self._capture())
+
+    def test_percentage_symbol_shown(self):
+        self.assertIn("%", self._capture())
+
+    def test_total_value_shown(self):
+        out = self._capture()
+        expected = 5 * 191.00 + 3 * 355.00 + 2 * 600.00
+        self.assertIn(f"{expected:,.2f}", out)
 
 
-class TestListPies(unittest.TestCase):
-    def test_lists_pies_when_no_query(self):
-        session = _make_session()
-        captured = StringIO()
-        with patch.object(p, "_session", return_value=session), \
-             patch.dict("os.environ", {"T212_API_KEY": "test-key", "T212_ENV": "demo"}), \
-             patch("sys.argv", ["portfolio.py"]), \
-             patch("sys.stdout", captured):
+# ---------------------------------------------------------------------------
+# main() integration
+# ---------------------------------------------------------------------------
+
+class TestMain(unittest.TestCase):
+    def _run_main(self, portfolio_doc, argv=None):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(portfolio_doc, f)
+            fname = f.name
+
+        argv = argv or ["portfolio.py", fname]
+        buf = StringIO()
+        with patch("yfinance.Ticker", side_effect=_ticker_side_effect), \
+             patch("sys.argv", argv), \
+             patch("sys.stdout", buf):
+            p.main()
+        return buf.getvalue()
+
+    def test_full_run(self):
+        out = self._run_main(PORTFOLIO_DOC)
+        self.assertIn("Global Tech", out)
+        self.assertIn("Apple Inc.", out)
+        self.assertIn("US67066G1040", out)
+
+    def test_missing_file_exits_1(self):
+        with patch("sys.argv", ["portfolio.py", "/no/such/file.json"]):
             with self.assertRaises(SystemExit) as cm:
                 p.main()
-            self.assertEqual(cm.exception.code, 0)
+        self.assertEqual(cm.exception.code, 1)
 
-        output = captured.getvalue()
-        self.assertIn("Global Tech", output)
-        self.assertIn("Dividend Kings", output)
-        self.assertIn("42", output)
+    def test_default_file_used_when_no_arg(self):
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", dir=".", prefix="portfolio",
+            delete=False
+        ) as f:
+            json.dump(PORTFOLIO_DOC, f)
+            fname = f.name
 
-
-class TestMainIntegration(unittest.TestCase):
-    def test_full_run_by_name(self):
-        session = _make_session()
-        captured = StringIO()
-        with patch.object(p, "_session", return_value=session), \
-             patch.dict("os.environ", {"T212_API_KEY": "test-key", "T212_ENV": "demo"}), \
-             patch("sys.argv", ["portfolio.py", "Global Tech"]), \
-             patch("sys.stdout", captured):
-            p.main()
-
-        output = captured.getvalue()
-        self.assertIn("Global Tech", output)
-        self.assertIn("NVIDIA Corporation", output)
-        self.assertIn("US67066G1040", output)
-
-    def test_full_run_by_id(self):
-        session = _make_session()
-        captured = StringIO()
-        with patch.object(p, "_session", return_value=session), \
-             patch.dict("os.environ", {"T212_API_KEY": "test-key", "T212_ENV": "demo"}), \
-             patch("sys.argv", ["portfolio.py", "42"]), \
-             patch("sys.stdout", captured):
-            p.main()
-
-        output = captured.getvalue()
-        self.assertIn("Global Tech", output)
+        orig_default = p.DEFAULT_FILE
+        try:
+            p.DEFAULT_FILE = fname
+            buf = StringIO()
+            with patch("yfinance.Ticker", side_effect=_ticker_side_effect), \
+                 patch("sys.argv", ["portfolio.py"]), \
+                 patch("sys.stdout", buf):
+                p.main()
+            self.assertIn("Global Tech", buf.getvalue())
+        finally:
+            p.DEFAULT_FILE = orig_default
+            Path(fname).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

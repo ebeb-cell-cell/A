@@ -1,0 +1,29 @@
+{
+  "name": "Global Tech",
+  "holdings": [
+    {
+      "ticker": "AAPL",
+      "quantity": 5,
+      "entry_price": 178.50,
+      "entry_date": "2023-07-10T14:30:00"
+    },
+    {
+      "ticker": "MSFT",
+      "quantity": 3,
+      "entry_price": 320.00,
+      "entry_date": "2023-07-10T14:31:00"
+    },
+    {
+      "ticker": "NVDA",
+      "quantity": 2,
+      "entry_price": 450.00,
+      "entry_date": "2023-08-01T10:00:00"
+    },
+    {
+      "ticker": "GOOGL",
+      "quantity": 4,
+      "entry_price": 135.00,
+      "entry_date": "2024-01-15T09:45:00"
+    }
+  ]
+}
