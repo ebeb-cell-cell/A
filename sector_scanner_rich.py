@@ -286,10 +286,13 @@ def coarse_screen(symbol: str, etf_key: str, etf_trend: str) -> "dict | None":
 
 # ── Phase 3: fine-check with accurate data (Twelve Data or yfinance fallback) ─
 
-def fine_check(candidate: dict) -> "dict | None":
+def fine_check(candidate: dict, debug: bool = False, relax: bool = False) -> "dict | None":
     """
     Re-fetch the candidate with Twelve Data (or yfinance if no key) and
     verify all remaining conditions with TradingView-accurate indicators.
+
+    debug=True  — print a per-condition breakdown regardless of outcome.
+    relax=True  — require 2/3 momentum indicators instead of all 3.
     """
     symbol    = candidate["symbol"]
     etf_key   = candidate["etf_key"]
@@ -298,12 +301,16 @@ def fine_check(candidate: dict) -> "dict | None":
     # Use Twelve Data if key provided, else fall back to yfinance
     closes = fetch_twelvedata(symbol) if TD_API_KEY else fetch_yfinance(symbol)
     if closes is None or len(closes) < 40:
+        if debug:
+            print(f"    {symbol:6s}  ✗ insufficient price data")
         return None
 
     # Daily RSI (accurate)
     daily_rsi  = calc_rsi(closes)
     last15_rsi = daily_rsi.iloc[-15:].dropna()
     if len(last15_rsi) < 5:
+        if debug:
+            print(f"    {symbol:6s}  ✗ insufficient RSI history")
         return None
 
     cur_rsi  = float(daily_rsi.iloc[-1])
@@ -321,19 +328,46 @@ def fine_check(candidate: dict) -> "dict | None":
     # Weekly RSI (accurate)
     weekly_rsi = calc_rsi(to_weekly(closes))
     if len(weekly_rsi.dropna()) < 5:
+        if debug:
+            print(f"    {symbol:6s}  ✗ insufficient weekly RSI history")
         return None
     cur_wrsi  = float(weekly_rsi.iloc[-1])
     prev_wrsi = float(weekly_rsi.iloc[-2])
     wrsi_up   = cur_wrsi > prev_wrsi
     wrsi_down = cur_wrsi < prev_wrsi
 
-    # BUY  (long)  — recently oversold + RSI recovering but still below 45
-    # SELL (short) — recently overbought + RSI rolling over but still above 55
+    # ── Condition evaluation ──────────────────────────────────────────────
+    if etf_trend == "up":
+        thresh_ok  = cur_rsi < 45
+        conditions = [rsi_up, macd_up, wrsi_up]
+        labels     = ["D-RSI↑", "MACD↑", "W-RSI↑"]
+        needed_dir = "BUY"
+    else:
+        thresh_ok  = cur_rsi > 55
+        conditions = [rsi_down, macd_down, wrsi_down]
+        labels     = ["D-RSI↓", "MACD↓", "W-RSI↓"]
+        needed_dir = "SELL"
+
+    passing = sum(conditions)
+    required = 2 if relax else 3
+
+    if debug:
+        thresh_label = f"RSI {'<45' if etf_trend == 'up' else '>55'}"
+        cond_str = "  ".join(
+            f"{'✓' if ok else '✗'} {lbl}" for ok, lbl in zip(conditions, labels)
+        )
+        mode_str = "[relax 2/3]" if relax else "[strict 3/3]"
+        print(
+            f"    {symbol:6s}  {mode_str}  "
+            f"{'✓' if thresh_ok else '✗'} {thresh_label} ({cur_rsi:.1f})  "
+            f"{cond_str}  "
+            f"→ {passing}/{len(conditions)} pass  "
+            f"{'✅ SIGNAL' if thresh_ok and passing >= required else '✗ filtered'}"
+        )
+
     signal = None
-    if etf_trend == "up"   and cur_rsi < 45 and rsi_up   and macd_up   and wrsi_up:
-        signal = "BUY"
-    if etf_trend == "down" and cur_rsi > 55 and rsi_down and macd_down and wrsi_down:
-        signal = "SELL"
+    if thresh_ok and passing >= required:
+        signal = needed_dir
 
     if signal is None:
         return None
@@ -437,6 +471,11 @@ def main():
                         help="Parallel workers for yfinance phases (default 10).")
     parser.add_argument("--out",     type=str, default=None,
                         help="Optional CSV output path, e.g. results.csv")
+    parser.add_argument("--debug",   action="store_true",
+                        help="Print per-condition breakdown for every Phase 3 candidate.")
+    parser.add_argument("--relax",   action="store_true",
+                        help="Require 2/3 momentum indicators instead of all 3 (catches "
+                             "more signals in choppy markets).")
     args = parser.parse_args()
 
     if args.tdkey:
@@ -497,21 +536,31 @@ def main():
 
     # ── Phase 3: Fine-check candidates via Twelve Data (sequential) ───────
     src = "Twelve Data" if TD_API_KEY else "yfinance"
-    print(f"Phase 3 — Fine-check {len(candidates)} candidate(s) via {src} …\n")
+    mode_note = ""
+    if args.relax:
+        mode_note += "  [--relax: 2/3 indicators required]"
+    if args.debug:
+        mode_note += "  [--debug: showing condition breakdown]"
+    print(f"Phase 3 — Fine-check {len(candidates)} candidate(s) via {src} …{mode_note}\n")
 
     results, fine_failed = [], []
     total = len(candidates)
 
     for i, cand in enumerate(candidates, 1):
         sym = cand["symbol"]
-        bar = "█" * int(i/total*30) + "░" * (30 - int(i/total*30))
-        print(f"\r  [{bar}] {i}/{total}  {sym:6s}", end="", flush=True)
+        if not args.debug:
+            bar = "█" * int(i/total*30) + "░" * (30 - int(i/total*30))
+            print(f"\r  [{bar}] {i}/{total}  {sym:6s}", end="", flush=True)
+        else:
+            print(f"  [{i}/{total}]  {sym}", flush=True)
         try:
-            r = fine_check(cand)
+            r = fine_check(cand, debug=args.debug, relax=args.relax)
             if r:
                 results.append(r)
-        except Exception:
+        except Exception as e:
             fine_failed.append(sym)
+            if args.debug:
+                print(f"    {sym:6s}  ✗ exception: {e}")
 
     print()
 
