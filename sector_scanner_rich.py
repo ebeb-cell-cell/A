@@ -362,8 +362,14 @@ def fine_check(candidate: dict, debug: bool = False, relax: bool = False) -> "di
 
     if debug:
         thresh_label = f"RSI {'<45' if etf_trend == 'up' else '>55'}"
+        values = [
+            f"{prev_rsi:.1f}→{cur_rsi:.1f}",
+            f"{prev_macd:.3f}→{cur_macd:.3f}",
+            f"{prev_wrsi:.1f}→{cur_wrsi:.1f}",
+        ]
         cond_str = "  ".join(
-            f"{'✓' if ok else '✗'} {lbl}" for ok, lbl in zip(conditions, labels)
+            f"{'✓' if ok else '✗'} {lbl} [{v}]"
+            for ok, lbl, v in zip(conditions, labels, values)
         )
         mode_str = "[relax 2/3]" if relax else "[strict 3/3]"
         print(
