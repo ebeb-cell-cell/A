@@ -1,27 +1,26 @@
 """
-Sector ETF · RSI / MACD Scanner  (Stooq + Twelve Data)
-=======================================================
-Phase 1+2 — Stooq   : free, no API key, parallel, clean CSV price data
-Phase 3   — Twelve Data : accurate fine-check on the small candidate list
+Sector ETF · RSI / MACD Scanner  (Stooq → yfinance fallback + Twelve Data)
+===========================================================================
+Phase 1+2 — Stooq (preferred) or yfinance Adj Close (auto-fallback)
+Phase 3   — Twelve Data (accurate fine-check) or same fallback source
 
-Why Stooq instead of yfinance?
-  • No MultiIndex quirks or library version breakage
-  • No auto_adjust dividend-artifact bug (no fake price spikes → no false RSI extremes)
-  • No rate limit — parallel-safe for all ~275 holdings
-  • Plain CSV over HTTP — trivial to parse, trivial to debug
-
-Stooq ticker format:  symbol.US  (e.g. AAPL.US, XLE.US, BRK.B.US)
+At startup the script probes Stooq with a single test request.
+  • Stooq reachable  → use Stooq (free, no API key, clean CSV, no rate limit)
+  • Stooq blocked    → fall back to yfinance with auto_adjust=False + Adj Close
+                       This column is pre-computed by Yahoo separately and does
+                       not suffer from the auto_adjust=True dividend-artifact bug
+                       that caused false RSI extremes in the original script.
 
 Twelve Data is still used for Phase 3 (fine-check) because it provides
 TradingView-accurate adjusted prices and is the authoritative source.
---tdkey is optional; without it Phase 3 falls back to Stooq as well.
+--tdkey is optional; without it Phase 3 uses the same fallback source.
 
 Requirements:
-    pip install pandas numpy requests rich
+    pip install pandas numpy requests rich yfinance
 
 Usage:
-    python sector_scanner_stooq.py                            # Stooq only
-    python sector_scanner_stooq.py --tdkey YOUR_KEY           # Stooq + TD fine-check
+    python sector_scanner_stooq.py                            # auto-detect source
+    python sector_scanner_stooq.py --tdkey YOUR_KEY           # + TD fine-check
     python sector_scanner_stooq.py --tdkey YOUR_KEY --out results.csv
     python sector_scanner_stooq.py --tdkey YOUR_KEY --debug
     python sector_scanner_stooq.py --tdkey YOUR_KEY --relax
@@ -185,20 +184,39 @@ def determine_trend(closes: pd.Series) -> str:
         return "down"
     return "unknown"
 
-# ── Data fetching ─────────────────────────────────────────────────────────────
+# ── Data source: Stooq with yfinance Adj Close fallback ──────────────────────
+
+_USE_STOOQ: bool = False   # set in main() after connectivity probe
+
+
+def _probe_stooq(timeout: float = 5.0) -> bool:
+    """Return True if Stooq is reachable and returning valid CSV."""
+    try:
+        r = requests.get(
+            "https://stooq.com/q/d/l/?s=xle.us&i=d",
+            timeout=timeout,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        return r.status_code == 200 and "Close" in r.text
+    except Exception:
+        return False
+
+
+def _clean(s: pd.Series) -> "pd.Series | None":
+    """Drop NaNs and rows with single-day moves > 20% (split/dividend artifacts)."""
+    s = s.dropna()
+    bad = s.pct_change().abs() > 0.20
+    if bad.any():
+        s = s[~bad]
+    return s if isinstance(s, pd.Series) and len(s) >= 40 else None
+
 
 def _stooq_ticker(symbol: str) -> str:
-    """Convert standard ticker to Stooq format.  BRK-B → BRK.B.US"""
-    return symbol.replace("-", ".").upper() + ".US"
+    """BRK-B → brk.b.us  (Stooq uses lowercase dot-separated tickers)"""
+    return symbol.replace("-", ".").lower() + ".us"
 
 
-def fetch_stooq(symbol: str, months: int = 9) -> "pd.Series | None":
-    """
-    Fetch daily closes from Stooq (free, no API key, no rate limit).
-    Returns a clean pd.Series of closing prices indexed by date.
-    Single-day moves > 20% are dropped to guard against unadjusted-split
-    artifacts (same defence as the fixed yfinance path).
-    """
+def _fetch_stooq(symbol: str, months: int = 9) -> "pd.Series | None":
     end   = datetime.now()
     start = end - timedelta(days=months * 31)
     url   = (
@@ -214,14 +232,39 @@ def fetch_stooq(symbol: str, months: int = 9) -> "pd.Series | None":
         df = pd.read_csv(io.StringIO(resp.text), parse_dates=["Date"])
         if df.empty or "Close" not in df.columns:
             return None
-        s = df.set_index("Date")["Close"].sort_index().dropna()
-        # Drop rows that look like unadjusted split artifacts (>20% single-day move)
-        bad = s.pct_change().abs() > 0.20
-        if bad.any():
-            s = s[~bad]
-        return s if len(s) >= 40 else None
+        return _clean(df.set_index("Date")["Close"].sort_index())
     except Exception:
         return None
+
+
+def _fetch_yfinance_adj(symbol: str, period: str = "9mo") -> "pd.Series | None":
+    """
+    yfinance with auto_adjust=False + Adj Close column.
+    'Adj Close' is pre-computed by Yahoo and does not suffer from the
+    in-place auto_adjust rewriting that can produce fake price spikes.
+    """
+    try:
+        import yfinance as yf
+        df = yf.download(symbol, period=period, interval="1d",
+                         progress=False, auto_adjust=False, threads=False)
+        if df.empty:
+            return None
+        # Handle both flat and MultiIndex column layouts
+        if isinstance(df.columns, pd.MultiIndex):
+            try:
+                s = df["Adj Close"][symbol]
+            except KeyError:
+                s = df["Adj Close"].iloc[:, 0]
+        else:
+            s = df["Adj Close"]
+        return _clean(s.squeeze())
+    except Exception:
+        return None
+
+
+def fetch_p12(symbol: str) -> "pd.Series | None":
+    """Phase 1+2 fetch — Stooq if available, yfinance Adj Close otherwise."""
+    return _fetch_stooq(symbol) if _USE_STOOQ else _fetch_yfinance_adj(symbol)
 
 
 def fetch_twelvedata(symbol: str, outputsize: int = 200) -> "pd.Series | None":
@@ -247,10 +290,10 @@ def fetch_twelvedata(symbol: str, outputsize: int = 200) -> "pd.Series | None":
     except Exception:
         return None
 
-# ── Phase 2: coarse RSI screen (Stooq) ───────────────────────────────────────
+# ── Phase 2: coarse RSI screen ───────────────────────────────────────────────
 
 def coarse_screen(symbol: str, etf_key: str, etf_trend: str) -> "dict | None":
-    closes   = fetch_stooq(symbol)
+    closes   = fetch_p12(symbol)
     if closes is None:
         return None
     rsi_vals = calc_rsi(closes)
@@ -279,7 +322,7 @@ def fine_check(candidate: dict, debug: bool = False,
     etf_key   = candidate["etf_key"]
     etf_trend = candidate["etf_trend"]
 
-    closes = fetch_twelvedata(symbol) if TD_API_KEY else fetch_stooq(symbol)
+    closes = fetch_twelvedata(symbol) if TD_API_KEY else fetch_p12(symbol)
     if closes is None or len(closes) < 40:
         if debug:
             print(f"    {symbol:6s}  ✗ no data")
@@ -450,24 +493,36 @@ def main():
                         help="Require 2/3 momentum indicators instead of all 3.")
     args = parser.parse_args()
 
+    global TD_API_KEY, _USE_STOOQ
+
     if args.tdkey:
         TD_API_KEY = args.tdkey
 
     console = Console() if RICH else None
     started = datetime.now()
-    p3_src  = "Twelve Data" if TD_API_KEY else "Stooq (no --tdkey)"
 
-    print("\n📡  Sector ETF · RSI / MACD Scanner  (Stooq + Twelve Data)")
+    # ── Probe data source for Phase 1+2 ───────────────────────────────────
+    print("\n📡  Sector ETF · RSI / MACD Scanner")
     print(f"    {started.strftime('%Y-%m-%d %H:%M')}")
-    print(f"    Phase 1+2 : Stooq     (parallel, workers={args.workers}, no API key)")
+    print("    Probing Phase 1+2 data source … ", end="", flush=True)
+    _USE_STOOQ = _probe_stooq()
+    if _USE_STOOQ:
+        p12_src = "Stooq (no API key)"
+        print("✓  Stooq reachable")
+    else:
+        p12_src = "yfinance Adj Close (auto_adjust=False)"
+        print("✗  Stooq blocked — using yfinance Adj Close")
+
+    p3_src = "Twelve Data" if TD_API_KEY else p12_src
+    print(f"    Phase 1+2 : {p12_src}  (parallel, workers={args.workers})")
     print(f"    Phase 3   : {p3_src}  (accurate indicators, sequential)\n")
 
     # ── Phase 1: ETF trends via Stooq ─────────────────────────────────────
-    print("Phase 1 — Sector ETF trends (Stooq) …\n")
+    print(f"Phase 1 — Sector ETF trends ({p12_src}) …\n")
 
     etf_trends = {}
     for etf in SECTOR_ETFS:
-        closes = fetch_stooq(etf)
+        closes = fetch_p12(etf)
         if closes is None:
             trend, price = "unknown", "–"
         else:
@@ -478,7 +533,7 @@ def main():
         print(f"  {etf:5s}  {arrow}  {trend.upper():8s}  {price:>8s}   {SECTOR_ETFS[etf]['name']}")
 
     # ── Phase 2: Coarse RSI screen via Stooq (parallel) ───────────────────
-    print("\nPhase 2 — Coarse RSI screen (Stooq, parallel) …\n")
+    print(f"\nPhase 2 — Coarse RSI screen ({p12_src}, parallel) …\n")
 
     screen_jobs = [
         (sym, etf, etf_trends[etf])
