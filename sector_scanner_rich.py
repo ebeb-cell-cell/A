@@ -222,7 +222,16 @@ def _to_series(raw) -> "pd.Series | None":
     if isinstance(raw, pd.DataFrame):
         raw = raw.iloc[:, 0]
     raw = raw.squeeze().dropna()
-    return raw if isinstance(raw, pd.Series) and len(raw) >= 40 else None
+    if not isinstance(raw, pd.Series) or len(raw) < 40:
+        return None
+    # Drop rows where the adjusted close implies a single-day move > 20%.
+    # yfinance auto_adjust=True occasionally produces corrupt dividend-adjustment
+    # artifacts that look like extreme 1-day spikes — these send RSI to 0/100.
+    pct = raw.pct_change().abs()
+    bad = pct > 0.20
+    if bad.any():
+        raw = raw[~bad]
+    return raw if len(raw) >= 40 else None
 
 
 def fetch_yfinance(symbol: str, period: str = "9mo") -> "pd.Series | None":
@@ -271,7 +280,7 @@ def coarse_screen(symbol: str, etf_key: str, etf_trend: str) -> "dict | None":
     if closes is None:
         return None
 
-    rsi_vals  = calc_rsi_fast(closes)
+    rsi_vals  = calc_rsi(closes)      # Wilder's RMA — matches Phase 3 / TradingView
     last15    = rsi_vals.iloc[-15:].dropna()
     if len(last15) < 5:
         return None
