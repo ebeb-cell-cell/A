@@ -48,51 +48,217 @@ except ImportError:
 # ── Sector ETF universe ───────────────────────────────────────────────────────
 
 SECTOR_ETFS = {
-    # Holdings sourced from stockanalysis.com (top 25 per ETF, as of Mar 2026)
+    # Full S&P 500 GICS sector membership (sourced from ETF fact sheets, Mar 2026)
+    # ~500 holdings across all 11 sectors vs ~275 in the original list
+
     "XLE":  {"name": "Energy",            "holdings": [
-                "XOM","CVX","COP","WMB","SLB","EOG","KMI","VLO","PSX","MPC",
-                "BKR","OKE","TRGP","OXY","EQT","FANG","TPL","HAL","DVN","EXE",
-                "CTRA","APA","HESM"]},
+                # Integrated / E&P
+                "XOM","CVX","COP","EOG","OXY","DVN","FANG","CTRA","APA","CHRD",
+                # Midstream / Pipelines
+                "WMB","KMI","OKE","TRGP","HESM","LNG","DTM",
+                # Refining
+                "VLO","PSX","MPC","DINO",
+                # Oilfield Services
+                "SLB","HAL","BKR","NOV",
+                # Other
+                "EQT","RRC","TPL","EXE","HES"]},
+
     "XLF":  {"name": "Financials",        "holdings": [
-                "BRK-B","JPM","V","MA","BAC","WFC","GS","MS","C","AXP",
-                "SCHW","BLK","SPGI","COF","PGR","CB","CME","ICE","MMC","BX",
-                "USB","PNC","BK","AON","MCO"]},
+                # Large-cap banks
+                "JPM","BAC","WFC","C","USB","PNC","TFC","BK","STT","NTRS",
+                # Regional banks
+                "FITB","HBAN","MTB","CFG","RF","KEY","ZION","CMA","FCNCA","WAL",
+                # Capital markets / asset managers
+                "GS","MS","SCHW","BLK","BX","APO","KKR","ARES","AMG","IVZ",
+                "TROW","BEN","AMP","RJF","LPLA","BR","SEIC","MKTX",
+                # Diversified financials & payments
+                "V","MA","AXP","COF","SYF","ALLY","BRK-B",
+                # Exchanges & data
+                "CME","ICE","CBOE","NDAQ","SPGI","MCO","FDS",
+                # Insurance
+                "PGR","CB","TRV","AFL","MET","PRU","ALL","HIG","AIG",
+                "GL","CINF","UNM","WRB","ACGL","EG","MMC","AON",
+                # Fintech (data processing — GICS IT but commonly screened here)
+                "GPN","FIS","FI"]},
+
     "XLK":  {"name": "Technology",        "holdings": [
-                "NVDA","AAPL","MSFT","AVGO","MU","PLTR","AMD","CSCO","AMAT","LRCX",
-                "ORCL","IBM","INTC","KLAC","TXN","CRM","ADI","APH","QCOM","ANET",
-                "APP","ACN","PANW","INTU","NOW"]},
+                # Semiconductors
+                "NVDA","AVGO","AMD","MU","INTC","QCOM","TXN","ADI","AMAT","LRCX",
+                "KLAC","ON","MCHP","NXPI","SWKS","MPWR","TER","SMCI",
+                # Software — infrastructure & cloud
+                "MSFT","ORCL","CRM","INTU","NOW","PLTR","APP","PANW","FTNT","CRWD",
+                "ZS","SNPS","CDNS","ANSS","PTC","VRSN","GEN","AKAM",
+                # IT services & consulting
+                "ACN","IBM","CTSH","EPAM","IT","DXC","JKHY",
+                # Hardware & storage
+                "AAPL","DELL","HPQ","HPE","WDC","STX","NTAP","APH","TEL","KEYS",
+                # Networking
+                "CSCO","ANET","FFIV","MSI",
+                # Payments (GICS Data Processing)
+                "PYPL",
+                # Other software
+                "GDDY"]},
+
     "XLV":  {"name": "Health Care",       "holdings": [
-                "LLY","JNJ","ABBV","MRK","UNH","AMGN","TMO","ABT","GILD","ISRG",
-                "PFE","SYK","DHR","BMY","MDT","VRTX","MCK","BSX","CVS","HCA",
-                "REGN","CI","COR","ELV","ZTS"]},
+                # Large-cap pharma
+                "LLY","JNJ","ABBV","MRK","PFE","BMY","AMGN","GILD","VRTX","REGN",
+                # Biotech
+                "MRNA","BIIB","ALNY","NBIX","UTHR","INCY","EXAS","NTRA","VTRS",
+                # Life sciences & diagnostics
+                "TMO","DHR","A","RVTY","IQV","WAT","MTD","ILMN","BRKR","TECH",
+                # Medical devices
+                "ABT","ISRG","MDT","BSX","SYK","ZBH","BDX","DXCM","PODD","RMD",
+                "HOLX","COO","TFX","HSIC","STE","GEHC","VEEV",
+                # Managed care & insurance
+                "UNH","CI","ELV","HUM","MOH","CNC",
+                # Health systems & distribution
+                "HCA","CVS","MCK","COR","ABC","CAH",
+                # Smaller biotech
+                "JAZZ"]},
+
     "XLI":  {"name": "Industrials",       "holdings": [
-                "GE","CAT","RTX","GEV","BA","UBER","UNP","HON","DE","ETN",
-                "LMT","PH","HWM","NOC","TT","GD","WM","ADP","JCI","MMM",
-                "PWR","FDX","EMR","UPS","CMI"]},
+                # Aerospace & defence
+                "GE","RTX","LMT","NOC","GD","BA","HWM","GEV","TDG","LHX",
+                "TDY","HII","AXON","TXT",
+                # Air freight & logistics
+                "UPS","FDX","EXPD","JBHT","ODFL","CHRW",
+                # Airlines
+                "DAL","UAL","LUV","AAL","ALK",
+                # Building products & HVAC
+                "CARR","OTIS","JCI","AOS","MAS","ALLE",
+                # Business services
+                "CTAS","ADP","VRSK","CPRT","RSG","WM",
+                # Electrical equipment & machinery
+                "ETN","EMR","PH","AME","DOV","ITW","XYL","ROP","IR","IDEX",
+                "GNRC","FTV",
+                # Construction & engineering
+                "CAT","DE","PWR","EME",
+                # Railroads
+                "UNP","NSC","CSX","WAB",
+                # Road transport & ground
+                "UBER",
+                # Trading companies & distributors
+                "GWW","FAST","SNA",
+                # Professional & government services
+                "HON","MMM","CMI","LDOS","SAIC","BAH",
+                # Ground transport
+                "CHRW"]},
+
     "XLB":  {"name": "Materials",         "holdings": [
-                "LIN","NEM","FCX","SHW","CTVA","APD","ECL","CRH","NUE","MLM",
-                "VMC","STLD","DOW","PPG","SW","IP","ALB","MOS","CF","IFF",
-                "PKG","AVY","EMN","CE","RPM"]},
+                # Specialty & industrial gases
+                "LIN","APD","ECL","IFF","ALB",
+                # Mining & metals
+                "NEM","FCX","NUE","STLD","CLF","AA","ATI","MP",
+                # Construction materials
+                "MLM","VMC","CRH","SHW","PPG","RPM",
+                # Chemicals
+                "DOW","LYB","CE","EMN","WLK","HUN","OLN","FMC","MOS","CF","CTVA",
+                # Containers & packaging
+                "PKG","IP","AVY","BALL","AMCR","OI","SEE","SON","GEF",
+                # Other
+                "SW"]},
+
     "XLY":  {"name": "Consumer Discret.", "holdings": [
-                "AMZN","TSLA","HD","MCD","TJX","LOW","BKNG","SBUX","ORLY","MAR",
-                "GM","RCL","HLT","NKE","ROST","DASH","AZO","ABNB","F","CMG",
-                "CVNA","YUM","DHI","EBAY","GRMN"]},
+                # E-commerce & broadline retail
+                "AMZN","EBAY","ETSY","W",
+                # Specialty retail
+                "HD","LOW","TJX","ROST","AZO","ORLY","BBWI","ULTA","WSM","RH",
+                "POOL","MHK","SCI",
+                # Autos
+                "TSLA","GM","F","CVNA","KMX","AN",
+                # Restaurants & fast food
+                "MCD","SBUX","CMG","YUM","DKNG",
+                # Hotels, resorts & cruise lines
+                "MAR","HLT","H","RCL","NCLH","CCL","MGM","LVS","WYNN","MTN",
+                # Travel & booking
+                "BKNG","EXPE","ABNB",
+                # Homebuilders
+                "DHI","LEN","PHM","NVR","TOL",
+                # Apparel & luxury
+                "NKE","RL","PVH","TPR","VFC","LULU",
+                # Auto parts
+                "GPC","DASH",
+                # Leisure products
+                "GRMN"]},
+
     "XLP":  {"name": "Consumer Staples",  "holdings": [
-                "WMT","COST","PG","KO","PM","PEP","CL","MDLZ","MO","MNST",
-                "TGT","SYY","KR","KDP","KMB","KVUE","HSY","ADM","DG","EL",
-                "GIS","DLTR","CHD","STZ","KHC"]},
+                # Hypermarkets & superstores
+                "WMT","COST","TGT","KR","SFM","GO","CASY",
+                # Food & beverages
+                "PEP","KO","MNST","STZ","TAP","BF-B",
+                "GIS","KHC","MDLZ","HSY","MKC","HRL","SJM","CPB","CAG","TSN",
+                "LW","BG","POST","ADM",
+                # Personal care & household
+                "PG","CL","KMB","KVUE","CHD","EL",
+                # Tobacco
+                "PM","MO",
+                # Food distribution
+                "SYY","USFD",
+                # Drug retail
+                "DG","DLTR",
+                # Other staples
+                "KDP"]},
+
     "XLRE": {"name": "Real Estate",       "holdings": [
-                "WELL","PLD","EQIX","AMT","O","PSA","DLR","SPG","VTR","CCI",
-                "CBRE","IRM","VICI","EXR","AVB","EQR","ARE","HST","KIM","MAA",
-                "NNN","SBA","ESS","UDR","WY"]},
+                # Industrial REITs
+                "PLD","REXR","EGP",
+                # Data centre REITs
+                "EQIX","DLR",
+                # Cell tower REITs
+                "AMT","CCI","SBA",
+                # Healthcare REITs
+                "WELL","VTR",
+                # Retail REITs
+                "SPG","KIM","REG","FRT",
+                # Residential REITs — apartments
+                "AVB","EQR","MAA","ESS","UDR","CPT","AIRC",
+                # Residential REITs — single family
+                "INVH","AMH",
+                # Office REITs
+                "BXP","VNO","ARE",
+                # Diversified / net-lease REITs
+                "O","NNN","VICI","GLPI",
+                # Self-storage REITs
+                "PSA","EXR","CUBE",
+                # Speciality REITs
+                "IRM","COLD",
+                # Hotels
+                "HST","PK","RHP",
+                # Timber REITs
+                "WY","RYN","PCH",
+                # RE services (non-REIT)
+                "CBRE"]},
+
     "XLU":  {"name": "Utilities",         "holdings": [
-                "NEE","SO","DUK","CEG","AEP","SRE","D","VST","EXC","XEL",
-                "ETR","PEG","PCG","ED","WEC","NRG","DTE","AEE","ATO","EIX",
-                "CNP","PPL","ES","AWK","FE"]},
+                # Electric — large cap
+                "NEE","SO","DUK","AEP","EXC","SRE","D","XEL","PEG","ETR",
+                "ED","WEC","DTE","AEE","EIX","PPL","FE","ES","CNP",
+                # Nuclear / merchant power
+                "CEG","VST","NRG",
+                # Water
+                "AWK",
+                # Multi-state electric
+                "LNT","PNW","EVRG","NI","OGE",
+                # Natural gas distribution
+                "ATO","NFG","UGI","SWX","NI",
+                # Other
+                "PCG","IDA"]},
+
     "XLC":  {"name": "Comm. Services",    "holdings": [
-                "META","GOOGL","GOOG","WBD","EA","NFLX","DIS","TTWO","OMC","VZ",
-                "CMCSA","T","TMUS","LYV","CHTR","TTD","FOXA","TKO","NWSA","FOX",
-                "MTCH","PSKY","NWS"]},
+                # Interactive media & social
+                "META","GOOGL","GOOG","SNAP","PINS","MTCH","IAC",
+                # Entertainment & streaming
+                "NFLX","DIS","WBD","PARA","SIRI","LYV","TKO",
+                # Video games
+                "EA","TTWO",
+                # Telecom
+                "VZ","T","TMUS","CHTR",
+                # Media & publishing
+                "CMCSA","FOXA","FOX","NWSA","NWS","NYT","IPG","OMC",
+                # Digital advertising & ad tech
+                "TTD",
+                # Streaming / other
+                "ROKU"]},
 }
 
 # ── Twelve Data throttle (free tier: 8 req/min) ───────────────────────────────
