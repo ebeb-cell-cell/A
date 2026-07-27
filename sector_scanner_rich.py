@@ -30,6 +30,7 @@ Usage:
 """
 
 import argparse
+import logging
 import time
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -38,6 +39,12 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import yfinance as yf
+
+# Silence yfinance's noisy per-symbol logger. A delisted/renamed ticker
+# otherwise prints "possibly delisted; no price data found" to the console
+# even though the scanner already handles the empty result gracefully
+# (fetch_yfinance returns None and the symbol is reported under "failed").
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 try:
     from rich.console import Console
@@ -52,7 +59,10 @@ except ImportError:
 
 SECTOR_ETFS = {
     # Full S&P 500 GICS sector membership (sourced from ETF fact sheets, Mar 2026)
-    # ~500 holdings across all 11 sectors vs ~275 in the original list
+    # ~500 holdings across all 11 sectors.
+    # Ticker list validated Jul 2026 — removed delisted/renamed symbols
+    # (ABC→COR, HES, ANSS, IPG, AIRC acquired/delisted; PARA→PSKY) and
+    # de-duplicated CHRW (XLI) and NI (XLU).
 
     "XLE":  {"name": "Energy",            "holdings": [
                 # Integrated / E&P
@@ -64,7 +74,7 @@ SECTOR_ETFS = {
                 # Oilfield Services
                 "SLB","HAL","BKR","NOV",
                 # Other
-                "EQT","RRC","TPL","EXE","HES"]},
+                "EQT","RRC","TPL","EXE"]},
 
     "XLF":  {"name": "Financials",        "holdings": [
                 # Large-cap banks
@@ -90,7 +100,7 @@ SECTOR_ETFS = {
                 "KLAC","ON","MCHP","NXPI","SWKS","MPWR","TER","SMCI",
                 # Software — infrastructure & cloud
                 "MSFT","ORCL","CRM","INTU","NOW","PLTR","APP","PANW","FTNT","CRWD",
-                "ZS","SNPS","CDNS","ANSS","PTC","VRSN","GEN","AKAM",
+                "ZS","SNPS","CDNS","PTC","VRSN","GEN","AKAM",
                 # IT services & consulting
                 "ACN","IBM","CTSH","EPAM","IT","DXC","JKHY",
                 # Hardware & storage
@@ -115,7 +125,7 @@ SECTOR_ETFS = {
                 # Managed care & insurance
                 "UNH","CI","ELV","HUM","MOH","CNC",
                 # Health systems & distribution
-                "HCA","CVS","MCK","COR","ABC","CAH",
+                "HCA","CVS","MCK","COR","CAH",
                 # Smaller biotech
                 "JAZZ"]},
 
@@ -143,9 +153,7 @@ SECTOR_ETFS = {
                 # Trading companies & distributors
                 "GWW","FAST","SNA",
                 # Professional & government services
-                "HON","MMM","CMI","LDOS","SAIC","BAH",
-                # Ground transport
-                "CHRW"]},
+                "HON","MMM","CMI","LDOS","SAIC","BAH"]},
 
     "XLB":  {"name": "Materials",         "holdings": [
                 # Specialty & industrial gases
@@ -214,7 +222,7 @@ SECTOR_ETFS = {
                 # Retail REITs
                 "SPG","KIM","REG","FRT",
                 # Residential REITs — apartments
-                "AVB","EQR","MAA","ESS","UDR","CPT","AIRC",
+                "AVB","EQR","MAA","ESS","UDR","CPT",
                 # Residential REITs — single family
                 "INVH","AMH",
                 # Office REITs
@@ -243,7 +251,7 @@ SECTOR_ETFS = {
                 # Multi-state electric
                 "LNT","PNW","EVRG","NI","OGE",
                 # Natural gas distribution
-                "ATO","NFG","UGI","SWX","NI",
+                "ATO","NFG","UGI","SWX",
                 # Other
                 "PCG","IDA"]},
 
@@ -251,13 +259,13 @@ SECTOR_ETFS = {
                 # Interactive media & social
                 "META","GOOGL","GOOG","SNAP","PINS","MTCH","IAC",
                 # Entertainment & streaming
-                "NFLX","DIS","WBD","PARA","SIRI","LYV","TKO",
+                "NFLX","DIS","WBD","PSKY","SIRI","LYV","TKO",
                 # Video games
                 "EA","TTWO",
                 # Telecom
                 "VZ","T","TMUS","CHTR",
                 # Media & publishing
-                "CMCSA","FOXA","FOX","NWSA","NWS","NYT","IPG","OMC",
+                "CMCSA","FOXA","FOX","NWSA","NWS","NYT","OMC",
                 # Digital advertising & ad tech
                 "TTD",
                 # Streaming / other
